@@ -4,29 +4,36 @@ const mongoose = require("mongoose");
 const dotenv = require("dotenv");
 const apiRoutes = require("./routes/api");
 
-// 1. Cấu hình đọc file môi trường .env
+// 🚨 1. IMPORT THÊM BỘ ĐIỀU KHIỂN AUTH VÀO ĐÂY
+const authController = require("./controllers/authController"); 
+
+// Cấu hình đọc file môi trường .env
 dotenv.config();
 
-// 2. Khởi tạo ứng dụng Express (Dòng này định nghĩa biến app cực kỳ quan trọng!)
+// Khởi tạo ứng dụng Express 
 const app = express();
 
-// 3. Cấu hình Middleware cơ bản
+// Cấu hình Middleware cơ bản
 app.use(cors()); 
 app.use(express.json());
 
-// 4. Định tuyến toàn bộ API qua tiền tố /api
+// Định tuyến toàn bộ API qua tiền tố /api
 app.use("/api", apiRoutes);
 
-// 5. Cấu hình chuỗi kết nối Database bảo mật
-// Tìm đến dòng này trong src/app.js:
+// Cấu hình chuỗi kết nối Database bảo mật
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/aa_studio_db";
 
-// 6. Kết nối đến cơ sở dữ liệu MongoDB
+// 🚨 2. CHÈN HÀM TẠO ADMIN VÀO KHỐI KẾT NỐI MONGODB (Nhớ thêm async)
 mongoose.connect(MONGODB_URI)
-  .then(() => console.log("Á À Studio Database đã kết nối thành công! 🎉"))
+  .then(async () => { 
+    console.log("Á À Studio Database đã kết nối thành công! 🎉");
+    
+    // Kích hoạt sinh tài khoản Admin duy nhất nếu DB trống
+    await authController.seedAdmin();
+  })
   .catch((err) => console.error("Lỗi kết nối database:", err));
 
-// 7. Mở cổng server lắng nghe các yêu cầu từ Frontend
+// Mở cổng server lắng nghe các yêu cầu từ Frontend
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server Backend đang chạy mượt mà tại cổng http://localhost:${PORT}`);

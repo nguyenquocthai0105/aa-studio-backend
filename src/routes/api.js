@@ -5,6 +5,10 @@ const router = express.Router();
 const Album = require("../models/Album");
 const Costume = require("../models/Costume");
 const uploadCloud = require("../config/cloudinary");
+const authController = require("../controllers/authController");
+
+//đăng nhập
+router.post("/auth/login", authController.login);
 
 // --- API AUTHENTICATION ---
 router.post("/auth/login", (req, res) => {
