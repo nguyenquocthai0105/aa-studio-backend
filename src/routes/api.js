@@ -1,58 +1,113 @@
 require('dotenv').config();
 const express = require("express");
 const router = express.Router();
+const jwt = require("jsonwebtoken"); // Cần dùng để tạo và xác thực token
 
 const Album = require("../models/Album");
 const Costume = require("../models/Costume");
 const uploadCloud = require("../config/cloudinary");
-const authController = require("../controllers/authController");
 
-//đăng nhập
-router.post("/auth/login", authController.login);
+// Lấy instance của cloudinary từ file config để dùng hàm xóa (destroy)
+const cloudinary = require('cloudinary').v2; 
 
-// --- API AUTHENTICATION ---
+// ==========================================
+//      MIDDLEWARE BẢO MẬT (VERIFY TOKEN)
+// ==========================================
+const verifyToken = (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ success: false, message: "Bạn không có quyền truy cập tính năng này!" });
+    }
+
+    // Bóc tách token từ chuỗi "Bearer <token>"
+    const token = authHeader.split(" ")[1];
+
+    // Xác thực token bằng JWT_SECRET đã cấu hình trên Render
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded; // Lưu thông tin admin vào request để dùng nếu cần
+    next(); // Hợp lệ thì cho đi tiếp vào API
+  } catch (error) {
+    return res.status(403).json({ success: false, message: "Token đã hết hạn hoặc không hợp lệ!" });
+  }
+};
+
+// ==========================================
+//          HÀM HỖ TRỢ XÓA ẢNH CLOUDINARY
+// ==========================================
+// Hàm tách public_id từ URL Cloudinary (Ví dụ: .../v12345/folder/image.jpg -> folder/image)
+const extractPublicId = (url) => {
+  try {
+    const parts = url.split('/');
+    const uploadIndex = parts.findIndex(part => part === 'upload');
+    if (uploadIndex === -1) return null;
+    
+    // Bỏ phần version (ví dụ: v1625... nếu có)
+    let startIndex = uploadIndex + 2;
+    if (parts[uploadIndex + 1].startsWith('v') && !isNaN(parts[uploadIndex + 1].substring(1))) {
+      startIndex = uploadIndex + 2;
+    } else {
+      startIndex = uploadIndex + 1;
+    }
+    
+    const publicIdWithExt = parts.slice(startIndex).join('/');
+    return publicIdWithExt.split('.')[0]; // Bỏ đuôi định dạng (.jpg, .png)
+  } catch (error) {
+    console.error("Lỗi trích xuất Public ID ảnh:", error);
+    return null;
+  }
+};
+
+// ==========================================
+//        API XÁC THỰC (AUTH) - ĐÃ UPGRADE
+// ==========================================
 router.post("/auth/login", (req, res) => {
   const { username, password } = req.body;
-  if (username === "quocthai123" && password === "quocthai123") {
+
+  // SO SÁNH VỚI BIẾN MÔI TRƯỜNG TRÊN RENDER (Không sợ lộ mật khẩu nữa)
+  if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASSWORD) {
+    
+    // Tạo mã JWT thật, có thời hạn sử dụng là 1 ngày (1d)
+    const token = jwt.sign(
+      { username: username, role: "admin" },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
     return res.status(200).json({ 
       success: true, 
       message: "Đăng nhập thành công!", 
-      token: "mock-jwt-token-aastudio" 
+      token: token // Trả token xịn về cho FE lưu
     });
   }
+
   return res.status(401).json({ success: false, message: "Tài khoản hoặc mật khẩu không chính xác!" });
 });
 
-// --- API ALBUMS ---
+// ==========================================
+//          QUẢN LÝ ALBUMS ảnh
+// ==========================================
+
+// Lấy danh sách (Ai xem cũng được - Không cần chặn)
 router.get("/albums", async (req, res) => {
   try {
     const albums = await Album.find().sort({ updatedAt: -1 });
     res.status(200).json(albums);
   } catch (error) { 
-  // Sửa dòng console.error cũ thành dòng này để xem chi tiết Object lỗi
-  console.error("🚨 LỖI CHI TIẾT TẠI BACKEND:", JSON.stringify(error, null, 2) || error);
-  res.status(500).json({ error: error.message }); 
-}
+    console.error("🚨 LỖI CHI TIẾT TẠI BACKEND:", JSON.stringify(error, null, 2) || error);
+    res.status(500).json({ error: error.message }); 
+  }
 });
 
-// ĐÃ NÂNG CẤP: Nhận tối đa 15 file ảnh thật gửi từ máy tính và tự động đẩy lên Cloudinary
-router.post("/albums", uploadCloud.array("images", 15), async (req, res) => {
+// Tạo Album mới (Cần Đăng Nhập) -> Gắn thêm verifyToken vào giữa
+router.post("/albums", verifyToken, uploadCloud.array("images", 15), async (req, res) => {
   try {
     const { name } = req.body;
-    
-    if (!name || !name.trim()) {
-      return res.status(400).json({ message: "Vui lòng nhập tên album!" });
-    }
+    if (!name || !name.trim()) return res.status(400).json({ message: "Vui lòng nhập tên album!" });
+    if (!req.files || req.files.length === 0) return res.status(400).json({ message: "Vui lòng chọn ít nhất 1 hình ảnh!" });
 
-    // Kiểm tra xem người dùng có chọn ảnh để upload không
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ message: "Vui lòng chọn ít nhất 1 hình ảnh!" });
-    }
-
-    // Map qua danh sách file đã nén và lấy link URL online mà Cloudinary trả về
     const imageUrls = req.files.map(file => file.path);
 
-    // Lưu vào MongoDB database
     const newAlbum = new Album({ 
       name, 
       images: imageUrls, 
@@ -62,82 +117,77 @@ router.post("/albums", uploadCloud.array("images", 15), async (req, res) => {
     await newAlbum.save();
     res.status(201).json({ success: true, message: "Tạo album thành công!", data: newAlbum });
   } catch (error) { 
-    // 🚨 ĐÃ CẬP NHẬT Ở ĐÂY: In bung bét toàn bộ ngóc ngách của Object lỗi ra Terminal Backend
-    console.log("🚨=== PHÁT HIỆN LỖI XỬ LÝ UPLOAD ALBUM ===🚨");
-    console.error(error); 
-    
     res.status(500).json({ error: error.message || "Lỗi xử lý file hoặc Database!" }); 
   }
 });
 
-// --- API CẬP NHẬT/CHỈNH SỬA ALBUM ---
-router.put("/albums/:id", uploadCloud.array("images", 15), async (req, res) => {
+// Cập nhật Album (Cần Đăng Nhập + Dọn dẹp ảnh thừa trên Cloudinary nếu admin xóa bớt ảnh)
+router.put("/albums/:id", verifyToken, uploadCloud.array("images", 15), async (req, res) => {
   try {
     const { name, existingImages } = req.body;
-    
-    if (!name || !name.trim()) {
-      return res.status(400).json({ message: "Tên album không được để trống" });
-    }
+    if (!name || !name.trim()) return res.status(400).json({ message: "Tên album không được để trống" });
 
-    // Biến đổi dữ liệu existingImages nhận từ FormData
-    // (FormData ép mọi thứ thành string, cần bóc tách lại thành mảng các link ảnh cũ)
+    // Lấy thông tin album cũ từ DB để so sánh ảnh bị xóa bớt
+    const oldAlbum = await Album.findById(req.params.id);
+    if (!oldAlbum) return res.status(404).json({ message: "Không tìm thấy album để cập nhật!" });
+
     let finalImages = [];
     if (existingImages) {
       finalImages = Array.isArray(existingImages) ? existingImages : [existingImages];
     }
 
-    // Nếu có đăng thêm ảnh mới, lấy link online từ Cloudinary và đẩy vào mảng
+    // --- LOGIC BẢO VỆ DUNG LƯỢNG CLOUDINARY ---
+    // Tìm những ảnh cũ có trong DB nhưng không còn nằm trong danh sách existingImages gửi lên
+    const deletedImages = oldAlbum.images.filter(imgUrl => !finalImages.includes(imgUrl));
+    for (const imgUrl of deletedImages) {
+      const publicId = extractPublicId(imgUrl);
+      if (publicId) await cloudinary.uploader.destroy(publicId); // Xóa thẳng trên Cloudinary
+    }
+
+    // Nếu có đăng thêm ảnh mới, gộp chung vào mảng
     if (req.files && req.files.length > 0) {
       const newImageUrls = req.files.map(file => file.path);
       finalImages = [...finalImages, ...newImageUrls];
     }
 
-    if (finalImages.length === 0) {
-      return res.status(400).json({ message: "Album phải có ít nhất 1 hình ảnh" });
-    }
+    if (finalImages.length === 0) return res.status(400).json({ message: "Album phải có ít nhất 1 hình ảnh" });
 
-    // Cập nhật thông tin mới vào MongoDB
     const updatedAlbum = await Album.findByIdAndUpdate(
       req.params.id,
-      {
-        name: name,
-        images: finalImages,
-        photosCount: finalImages.length
-      },
-      { new: true } // Trả về dữ liệu mới sau khi sửa đổi
+      { name, images: finalImages, photosCount: finalImages.length },
+      { new: true }
     );
-
-    if (!updatedAlbum) {
-      return res.status(404).json({ success: false, message: "Không tìm thấy album để cập nhật!" });
-    }
 
     res.status(200).json({ success: true, message: "Cập nhật album thành công! 🎉", data: updatedAlbum });
   } catch (error) {
-    console.error("🚨 LỖI CẬP NHẬT ALBUM:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// --- API XÓA ALBUM ---
-router.delete("/albums/:id", async (req, res) => {
+// Xóa vĩnh viễn Album (Cần Đăng Nhập + Xóa sạch toàn bộ ảnh của album đó trên Cloudinary)
+router.delete("/albums/:id", verifyToken, async (req, res) => {
   try {
-    const deletedAlbum = await Album.findByIdAndDelete(req.params.id);
-    
-    if (!deletedAlbum) {
-      return res.status(404).json({ success: false, message: "Không tìm thấy album để xóa!" });
+    const album = await Album.findById(req.params.id);
+    if (!album) return res.status(404).json({ success: false, message: "Không tìm thấy album để xóa!" });
+
+    // Xóa sạch toàn bộ ảnh thuộc album này trên Cloudinary trước khi xóa DB
+    for (const imgUrl of album.images) {
+      const publicId = extractPublicId(imgUrl);
+      if (publicId) await cloudinary.uploader.destroy(publicId);
     }
-    
-    res.status(200).json({ success: true, message: "Xóa album thành công! 🗑️" });
+
+    await Album.findByIdAndDelete(req.params.id);
+    res.status(200).json({ success: true, message: "Xóa album và toàn bộ ảnh thành công! 🗑️" });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 // ==========================================
-//          QUẢN LÝ TRANG PHỤC (COSTUME)
+//        QUẢN LÝ TRANG PHỤC (COSTUME)
 // ==========================================
 
-// 1. API: LẤY DANH SÁCH TRANG PHỤC (Đã sắp xếp mới nhất lên đầu)
+// Lấy danh sách (Public công khai)
 router.get("/costumes", async (req, res) => {
   try {
     const costumes = await Costume.find().sort({ createdAt: -1 });
@@ -147,71 +197,51 @@ router.get("/costumes", async (req, res) => {
   }
 });
 
-// 2. API: TẠO MỚI TRANG PHỤC (Tự động đẩy 1 file ảnh lên Cloudinary)
-router.post("/costumes", uploadCloud.single("image"), async (req, res) => {
+// Tạo trang phục (Cần Đăng Nhập)
+router.post("/costumes", verifyToken, uploadCloud.single("image"), async (req, res) => {
   try {
     const { name, price } = req.body;
-
-    if (!name || !name.trim()) {
-      return res.status(400).json({ message: "Vui lòng nhập tên trang phục!" });
-    }
-    if (!price) {
-      return res.status(400).json({ message: "Vui lòng nhập giá thuê!" });
-    }
-    if (!req.file) {
-      return res.status(400).json({ message: "Vui lòng tải lên hình ảnh trang phục!" });
-    }
-
-    // Đường link online do Cloudinary trả về
-    const imageUrl = req.file.path;
+    if (!name || !name.trim()) return res.status(400).json({ message: "Vui lòng nhập tên trang phục!" });
+    if (!price) return res.status(400).json({ message: "Vui lòng nhập giá thuê!" });
+    if (!req.file) return res.status(400).json({ message: "Vui lòng tải lên hình ảnh trang phục!" });
 
     const newCostume = new Costume({
       name,
       price: Number(price),
-      imageUrl
+      imageUrl: req.file.path
     });
 
     await newCostume.save();
     res.status(201).json({ success: true, message: "Thêm trang phục thành công!", data: newCostume });
   } catch (error) {
-    console.error("🚨 LỖI TẠI BACKEND ĐỒ CƯỚI:", error);
     res.status(500).json({ error: error.message || "Lỗi xử lý file hoặc Database!" });
   }
 });
 
-// 3. API: CẬP NHẬT TRANG PHỤC (Cho phép giữ ảnh cũ hoặc đổi ảnh mới)
-router.put("/costumes/:id", uploadCloud.single("image"), async (req, res) => {
+// Cập nhật trang phục (Cần Đăng Nhập + Xóa ảnh cũ trên Cloudinary nếu đổi ảnh mới)
+router.put("/costumes/:id", verifyToken, uploadCloud.single("image"), async (req, res) => {
   try {
     const { name, price } = req.body;
-    
-    if (!name || !name.trim()) {
-      return res.status(400).json({ message: "Tên trang phục không được để trống" });
-    }
-    if (!price) {
-      return res.status(400).json({ message: "Giá thuê không được để trống" });
-    }
+    if (!name || !name.trim()) return res.status(400).json({ message: "Tên trang phục không được để trống" });
+    if (!price) return res.status(400).json({ message: "Giá thuê không được để trống" });
 
-    // Mặc định giữ lại link ảnh cũ từ cơ sở dữ liệu gửi lên nếu không upload file mới
+    const oldCostume = await Costume.findById(req.params.id);
+    if (!oldCostume) return res.status(404).json({ message: "Không tìm thấy trang phục!" });
+
     let finalImageUrl = req.body.imageUrl;
 
-    // Nếu admin chọn file ảnh mới, đè đường link mới của Cloudinary vào
+    // Nếu thay ảnh mới, tiến hành xóa ảnh cũ trên Cloudinary để giải phóng bộ nhớ
     if (req.file) {
       finalImageUrl = req.file.path;
+      const oldPublicId = extractPublicId(oldCostume.imageUrl);
+      if (oldPublicId) await cloudinary.uploader.destroy(oldPublicId);
     }
 
     const updatedCostume = await Costume.findByIdAndUpdate(
       req.params.id,
-      {
-        name,
-        price: Number(price),
-        imageUrl: finalImageUrl
-      },
+      { name, price: Number(price), imageUrl: finalImageUrl },
       { new: true }
     );
-
-    if (!updatedCostume) {
-      return res.status(404).json({ success: false, message: "Không tìm thấy trang phục!" });
-    }
 
     res.status(200).json({ success: true, message: "Cập nhật trang phục thành công! 🎉", data: updatedCostume });
   } catch (error) {
@@ -219,13 +249,17 @@ router.put("/costumes/:id", uploadCloud.single("image"), async (req, res) => {
   }
 });
 
-// 4. API: XÓA VĨNH VIỄN TRANG PHỤC
-router.delete("/costumes/:id", async (req, res) => {
+// Xóa trang phục (Cần Đăng Nhập + Xóa ảnh trên Cloudinary)
+router.delete("/costumes/:id", verifyToken, async (req, res) => {
   try {
-    const deletedCostume = await Costume.findByIdAndDelete(req.params.id);
-    if (!deletedCostume) {
-      return res.status(404).json({ success: false, message: "Không tìm thấy trang phục cần xóa!" });
-    }
+    const costume = await Costume.findById(req.params.id);
+    if (!costume) return res.status(404).json({ success: false, message: "Không tìm thấy trang phục cần xóa!" });
+
+    // Xóa ảnh trên Cloudinary
+    const publicId = extractPublicId(costume.imageUrl);
+    if (publicId) await cloudinary.uploader.destroy(publicId);
+
+    await Costume.findByIdAndDelete(req.params.id);
     res.status(200).json({ success: true, message: "Xóa trang phục thành công! 🗑️" });
   } catch (error) {
     res.status(500).json({ error: error.message });
