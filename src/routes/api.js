@@ -66,17 +66,66 @@ router.post("/albums", uploadCloud.array("images", 15), async (req, res) => {
   }
 });
 
-router.put("/albums/:id", async (req, res) => {
+// --- API CẬP NHẬT/CHỈNH SỬA ALBUM ---
+router.put("/albums/:id", uploadCloud.array("images", 15), async (req, res) => {
   try {
-    const { name, images } = req.body;
-    const updated = await Album.findByIdAndUpdate(
-      req.params.id, 
-      { name, images, photosCount: images ? images.length : 0 }, 
-      { new: true }
+    const { name, existingImages } = req.body;
+    
+    if (!name || !name.trim()) {
+      return res.status(400).json({ message: "Tên album không được để trống" });
+    }
+
+    // Biến đổi dữ liệu existingImages nhận từ FormData
+    // (FormData ép mọi thứ thành string, cần bóc tách lại thành mảng các link ảnh cũ)
+    let finalImages = [];
+    if (existingImages) {
+      finalImages = Array.isArray(existingImages) ? existingImages : [existingImages];
+    }
+
+    // Nếu có đăng thêm ảnh mới, lấy link online từ Cloudinary và đẩy vào mảng
+    if (req.files && req.files.length > 0) {
+      const newImageUrls = req.files.map(file => file.path);
+      finalImages = [...finalImages, ...newImageUrls];
+    }
+
+    if (finalImages.length === 0) {
+      return res.status(400).json({ message: "Album phải có ít nhất 1 hình ảnh" });
+    }
+
+    // Cập nhật thông tin mới vào MongoDB
+    const updatedAlbum = await Album.findByIdAndUpdate(
+      req.params.id,
+      {
+        name: name,
+        images: finalImages,
+        photosCount: finalImages.length
+      },
+      { new: true } // Trả về dữ liệu mới sau khi sửa đổi
     );
-    res.status(200).json({ success: true, data: updated });
-  } catch (error) { 
-    res.status(500).json({ error: error.message }); 
+
+    if (!updatedAlbum) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy album để cập nhật!" });
+    }
+
+    res.status(200).json({ success: true, message: "Cập nhật album thành công! 🎉", data: updatedAlbum });
+  } catch (error) {
+    console.error("🚨 LỖI CẬP NHẬT ALBUM:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- API XÓA ALBUM ---
+router.delete("/albums/:id", async (req, res) => {
+  try {
+    const deletedAlbum = await Album.findByIdAndDelete(req.params.id);
+    
+    if (!deletedAlbum) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy album để xóa!" });
+    }
+    
+    res.status(200).json({ success: true, message: "Xóa album thành công! 🗑️" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
