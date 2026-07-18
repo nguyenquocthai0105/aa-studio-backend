@@ -129,38 +129,102 @@ router.delete("/albums/:id", async (req, res) => {
   }
 });
 
-// --- API COSTUMES ---
+// ==========================================
+//          QUẢN LÝ TRANG PHỤC (COSTUME)
+// ==========================================
+
+// 1. API: LẤY DANH SÁCH TRANG PHỤC (Đã sắp xếp mới nhất lên đầu)
 router.get("/costumes", async (req, res) => {
   try {
-    const costumes = await Costume.find().sort({ updatedAt: -1 });
+    const costumes = await Costume.find().sort({ createdAt: -1 });
     res.status(200).json(costumes);
-  } catch (error) { 
-    res.status(500).json({ error: error.message }); 
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
-router.post("/costumes", async (req, res) => {
+// 2. API: TẠO MỚI TRANG PHỤC (Tự động đẩy 1 file ảnh lên Cloudinary)
+router.post("/costumes", uploadCloud.single("image"), async (req, res) => {
   try {
-    const { name, price, imageUrl } = req.body;
-    const newCostume = new Costume({ name, price: Number(price), imageUrl });
+    const { name, price } = req.body;
+
+    if (!name || !name.trim()) {
+      return res.status(400).json({ message: "Vui lòng nhập tên trang phục!" });
+    }
+    if (!price) {
+      return res.status(400).json({ message: "Vui lòng nhập giá thuê!" });
+    }
+    if (!req.file) {
+      return res.status(400).json({ message: "Vui lòng tải lên hình ảnh trang phục!" });
+    }
+
+    // Đường link online do Cloudinary trả về
+    const imageUrl = req.file.path;
+
+    const newCostume = new Costume({
+      name,
+      price: Number(price),
+      imageUrl
+    });
+
     await newCostume.save();
-    res.status(201).json({ success: true, data: newCostume });
-  } catch (error) { 
-    res.status(500).json({ error: error.message }); 
+    res.status(201).json({ success: true, message: "Thêm trang phục thành công!", data: newCostume });
+  } catch (error) {
+    console.error("🚨 LỖI TẠI BACKEND ĐỒ CƯỚI:", error);
+    res.status(500).json({ error: error.message || "Lỗi xử lý file hoặc Database!" });
   }
 });
 
-router.put("/costumes/:id", async (req, res) => {
+// 3. API: CẬP NHẬT TRANG PHỤC (Cho phép giữ ảnh cũ hoặc đổi ảnh mới)
+router.put("/costumes/:id", uploadCloud.single("image"), async (req, res) => {
   try {
-    const { name, price, imageUrl } = req.body;
-    const updated = await Costume.findByIdAndUpdate(
-      req.params.id, 
-      { name, price: Number(price), imageUrl }, 
+    const { name, price } = req.body;
+    
+    if (!name || !name.trim()) {
+      return res.status(400).json({ message: "Tên trang phục không được để trống" });
+    }
+    if (!price) {
+      return res.status(400).json({ message: "Giá thuê không được để trống" });
+    }
+
+    // Mặc định giữ lại link ảnh cũ từ cơ sở dữ liệu gửi lên nếu không upload file mới
+    let finalImageUrl = req.body.imageUrl;
+
+    // Nếu admin chọn file ảnh mới, đè đường link mới của Cloudinary vào
+    if (req.file) {
+      finalImageUrl = req.file.path;
+    }
+
+    const updatedCostume = await Costume.findByIdAndUpdate(
+      req.params.id,
+      {
+        name,
+        price: Number(price),
+        imageUrl: finalImageUrl
+      },
       { new: true }
     );
-    res.status(200).json({ success: true, data: updated });
-  } catch (error) { 
-    res.status(500).json({ error: error.message }); 
+
+    if (!updatedCostume) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy trang phục!" });
+    }
+
+    res.status(200).json({ success: true, message: "Cập nhật trang phục thành công! 🎉", data: updatedCostume });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 4. API: XÓA VĨNH VIỄN TRANG PHỤC
+router.delete("/costumes/:id", async (req, res) => {
+  try {
+    const deletedCostume = await Costume.findByIdAndDelete(req.params.id);
+    if (!deletedCostume) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy trang phục cần xóa!" });
+    }
+    res.status(200).json({ success: true, message: "Xóa trang phục thành công! 🗑️" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
