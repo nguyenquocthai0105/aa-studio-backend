@@ -18,14 +18,13 @@ cloudinary.config({
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'aa_studio_albums', // Thư mục lưu ảnh trên Cloudinary
+    folder: 'aa_studio_albums',
     allowed_formats: ['jpg', 'png', 'jpeg', 'webp'],
-    // 🚨 ĐÃ SỬA: Gom các thuộc tính transformation vào chung 1 Object thay vì dùng mảng
     transformation: { 
-      width: 2000, 
-      crop: 'limit', 
-      quality: 'auto', 
-      fetch_format: 'auto' 
+      width: 2560,           // nâng lên cho màn hình lớn/2K-4K
+      crop: 'limit',
+      quality: 'auto:best',  // ưu tiên chất lượng hơn dung lượng
+      fetch_format: 'auto'
     }
   },
 });
